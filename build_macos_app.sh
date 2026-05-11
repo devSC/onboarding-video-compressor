@@ -129,10 +129,20 @@ int main(int argc, char **argv) {
 }
 C
 
-clang -framework CoreFoundation -include mach-o/dyld.h "$PROJECT_DIR/dist/launcher.c" -o "$MACOS_DIR/launcher"
+if clang -arch arm64 -arch x86_64 -framework CoreFoundation -include mach-o/dyld.h "$PROJECT_DIR/dist/launcher.c" -o "$MACOS_DIR/launcher" 2>/dev/null; then
+  :
+else
+  echo "Warning: failed to build universal launcher; falling back to native architecture." >&2
+  clang -framework CoreFoundation -include mach-o/dyld.h "$PROJECT_DIR/dist/launcher.c" -o "$MACOS_DIR/launcher"
+fi
 rm -f "$PROJECT_DIR/dist/launcher.c"
 
 xattr -cr "$APP_DIR" 2>/dev/null || true
 codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
 
+if command -v ditto >/dev/null 2>&1; then
+  ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$PROJECT_DIR/dist/$APP_NAME.zip"
+fi
+
 echo "$APP_DIR"
+lipo -info "$MACOS_DIR/launcher" 2>/dev/null || file "$MACOS_DIR/launcher"
