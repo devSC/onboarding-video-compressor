@@ -10,6 +10,19 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ICON_SOURCE="$PROJECT_DIR/assets/app_icon_1024.png"
 ICONSET_DIR="$PROJECT_DIR/dist/AppIcon.iconset"
 ICON_FILE_NAME="AppIcon.icns"
+ZIP_PATH="$PROJECT_DIR/dist/$APP_NAME.zip"
+NOTARIZED_ZIP_PATH="$PROJECT_DIR/dist/$APP_NAME-notarized.zip"
+SIGN_IDENTITY="${DEVELOPER_ID_APPLICATION:-${CODESIGN_IDENTITY:--}}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-}"
+
+sign_target() {
+  local target="$1"
+  if [ "$SIGN_IDENTITY" = "-" ]; then
+    codesign --force --sign - "$target" >/dev/null
+  else
+    codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$target"
+  fi
+}
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
@@ -153,11 +166,48 @@ if command -v swiftc >/dev/null 2>&1; then
 fi
 
 xattr -cr "$APP_DIR" 2>/dev/null || true
-codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
+
+if [ -d "$RESOURCES_DIR/bin" ]; then
+  while IFS= read -r -d '' tool; do
+    if [ -x "$tool" ]; then
+      sign_target "$tool"
+    fi
+  done < <(find "$RESOURCES_DIR/bin" -type f -print0)
+fi
+
+sign_target "$MACOS_DIR/launcher"
+if [ "$SIGN_IDENTITY" = "-" ]; then
+  codesign --force --deep --sign - "$APP_DIR" >/dev/null
+else
+  codesign --force --deep --timestamp --options runtime --sign "$SIGN_IDENTITY" "$APP_DIR"
+fi
 
 if command -v ditto >/dev/null 2>&1; then
-  ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$PROJECT_DIR/dist/$APP_NAME.zip"
+  rm -f "$ZIP_PATH" "$NOTARIZED_ZIP_PATH"
+  ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_PATH"
+fi
+
+if [ -n "$NOTARY_PROFILE" ]; then
+  if [ "$SIGN_IDENTITY" = "-" ]; then
+    echo "ERROR: notarization requires Developer ID signing. Set DEVELOPER_ID_APPLICATION." >&2
+    exit 1
+  fi
+  if ! command -v xcrun >/dev/null 2>&1; then
+    echo "ERROR: xcrun is required for notarization." >&2
+    exit 1
+  fi
+  xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$APP_DIR"
+  xcrun stapler validate "$APP_DIR"
+  ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$NOTARIZED_ZIP_PATH"
 fi
 
 echo "$APP_DIR"
 lipo -info "$MACOS_DIR/launcher" 2>/dev/null || file "$MACOS_DIR/launcher"
+codesign --verify --deep --strict "$APP_DIR"
+spctl -a -vvv -t exec "$APP_DIR" || true
+if [ -f "$NOTARIZED_ZIP_PATH" ]; then
+  echo "$NOTARIZED_ZIP_PATH"
+elif [ -f "$ZIP_PATH" ]; then
+  echo "$ZIP_PATH"
+fi

@@ -98,6 +98,43 @@ dist/引导页视频压缩工具.app/Contents/Resources/bin/
 
 当前 App launcher 是原生 Swift universal binary，不依赖 Python；但如果没有内置 `ffmpeg/ffprobe`，普通同事打开 App 后会看到“缺少内置依赖”的提示。
 
+## Developer ID 签名和公证
+
+面向普通同事分发时，需要使用 Apple Developer ID 签名并提交 notarization。否则 macOS Gatekeeper 可能提示“应用程序无法打开”或“无法验证开发者”。
+
+先确认本机钥匙串里有证书：
+
+```bash
+security find-identity -v -p codesigning | grep "Developer ID Application"
+```
+
+如果没有，需要在 Apple Developer 后台创建并安装 `Developer ID Application` 证书。
+
+配置 notarytool profile：
+
+```bash
+xcrun notarytool store-credentials "AC_PASSWORD" \
+  --apple-id "你的 Apple ID" \
+  --team-id "你的 Team ID" \
+  --password "App 专用密码"
+```
+
+构建、签名、公证：
+
+```bash
+DEVELOPER_ID_APPLICATION="Developer ID Application: Your Company (TEAMID)" \
+NOTARY_PROFILE="AC_PASSWORD" \
+./build_macos_app.sh
+```
+
+成功后分发：
+
+```text
+dist/引导页视频压缩工具-notarized.zip
+```
+
+如果只运行 `./build_macos_app.sh`，脚本会使用 ad-hoc 签名生成开发验证包；这个包不适合直接给普通同事分发。
+
 ## App 图标
 
 图标源文件：
