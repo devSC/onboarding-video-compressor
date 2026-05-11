@@ -27,7 +27,14 @@ PRESET_SIZES = [
     (360, 480, "360x480 - 更小体积"),
 ]
 CUSTOM_SIZE_LABEL = "自定义尺寸..."
-CRF = 26
+DEFAULT_CRF = 26
+QUALITY_PRESETS = [
+    (23, "高清 - CRF 23，体积较大"),
+    (26, "标准 - CRF 26，推荐"),
+    (30, "更小 - CRF 30，画质略降"),
+    (34, "极小 - CRF 34，画质下降明显"),
+]
+CUSTOM_CRF_LABEL = "自定义 CRF..."
 PRESET = "slow"
 POSTER_Q = 6
 
@@ -58,6 +65,16 @@ class TargetSize:
         return f"{self.width}x{self.height}"
 
 
+@dataclass(frozen=True)
+class CompressionSettings:
+    target_size: TargetSize
+    crf: int
+
+    @property
+    def output_label(self) -> str:
+        return f"{self.target_size.label}_crf{self.crf}"
+
+
 def human_bytes(n: int) -> str:
     if n < 1024:
         return f"{n} B"
@@ -82,6 +99,16 @@ def parse_target_size(raw: str) -> TargetSize:
     if width % 2 != 0 or height % 2 != 0:
         raise argparse.ArgumentTypeError("H.264 输出尺寸必须是偶数")
     return TargetSize(width=width, height=height)
+
+
+def parse_crf(raw: str) -> int:
+    try:
+        crf = int(str(raw).strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("CRF 必须是整数，例如 26") from exc
+    if crf < 0 or crf > 51:
+        raise argparse.ArgumentTypeError("CRF 范围必须是 0..51")
+    return crf
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -163,7 +190,7 @@ def ffprobe_audio_count(ffprobe: str, path: Path) -> int:
     return len([line for line in cp.stdout.splitlines() if line.strip()])
 
 
-def encode_video(ffmpeg: str, src: Path, dst: Path, target_size: TargetSize) -> None:
+def encode_video(ffmpeg: str, src: Path, dst: Path, settings: CompressionSettings) -> None:
     cp = run([
         ffmpeg,
         "-nostdin",
@@ -174,12 +201,12 @@ def encode_video(ffmpeg: str, src: Path, dst: Path, target_size: TargetSize) -> 
         "-map", "0:v:0",
         "-vf",
         (
-            f"scale={target_size.width}:{target_size.height}:force_original_aspect_ratio=increase,"
-            f"crop={target_size.width}:{target_size.height}"
+            f"scale={settings.target_size.width}:{settings.target_size.height}:force_original_aspect_ratio=increase,"
+            f"crop={settings.target_size.width}:{settings.target_size.height}"
         ),
         "-c:v", "libx264",
         "-preset", PRESET,
-        "-crf", str(CRF),
+        "-crf", str(settings.crf),
         "-pix_fmt", "yuv420p",
         "-an",
         "-movflags", "+faststart",
@@ -246,7 +273,7 @@ def write_summary_md(
     input_dir: Path,
     out_root: Path,
     results: list[ProcessResult],
-    target_size: TargetSize,
+    settings: CompressionSettings,
 ) -> None:
     success = [r for r in results if r.status == "success"]
     failed = [r for r in results if r.status != "success"]
@@ -262,9 +289,9 @@ def write_summary_md(
         "",
         "## 规则",
         "",
-        f"- 输出尺寸：`{target_size.label}`",
+        f"- 输出尺寸：`{settings.target_size.label}`",
         "- 音轨：移除",
-        f"- 视频编码：`libx264 / CRF {CRF} / preset {PRESET}`",
+        f"- 视频编码：`libx264 / CRF {settings.crf} / preset {PRESET}`",
         "- 海报：首帧 JPG",
         "- 源文件：不覆盖、不修改",
         "",
@@ -290,12 +317,13 @@ def write_summary_md(
     summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_process_doc(doc_path: Path, input_dir: Path, out_root: Path, target_size: TargetSize) -> None:
-    doc_path.write_text(f"""# {target_size.label} 无音轨视频压缩处理说明
+def write_process_doc(doc_path: Path, input_dir: Path, out_root: Path, settings: CompressionSettings) -> None:
+    doc_path.write_text(f"""# {settings.target_size.label} 无音轨视频压缩处理说明
 
 输入目录：`{input_dir}`
 输出目录：`{out_root / "videos"}`
-目标尺寸：`{target_size.label}`
+目标尺寸：`{settings.target_size.label}`
+CRF：`{settings.crf}`
 
 ## 参数
 
@@ -307,10 +335,10 @@ ffmpeg \\
   -y \\
   -i "input.mp4" \\
   -map 0:v:0 \\
-  -vf "scale={target_size.width}:{target_size.height}:force_original_aspect_ratio=increase,crop={target_size.width}:{target_size.height}" \\
+  -vf "scale={settings.target_size.width}:{settings.target_size.height}:force_original_aspect_ratio=increase,crop={settings.target_size.width}:{settings.target_size.height}" \\
   -c:v libx264 \\
   -preset slow \\
-  -crf 26 \\
+  -crf {settings.crf} \\
   -pix_fmt yuv420p \\
   -an \\
   -movflags +faststart \\
@@ -340,8 +368,8 @@ flowchart TD
   A["选择视频文件夹"] --> B["扫描视频文件"]
   B --> C["选择目标尺寸"]
   C --> D["逐个处理"]
-  D --> E["缩放并裁剪为 {target_size.label}"]
-  E --> F["libx264 / CRF 26 / preset slow 编码"]
+  D --> E["缩放并裁剪为 {settings.target_size.label}"]
+  E --> F["libx264 / CRF {settings.crf} / preset slow 编码"]
   F --> G["移除音轨"]
   G --> H["解码校验"]
   H --> I["生成首帧海报"]
@@ -353,7 +381,7 @@ flowchart TD
 
 def process_folder(
     input_dir: Path,
-    target_size: TargetSize,
+    settings: CompressionSettings,
     log: Callable[[str], None] = print,
 ) -> Path:
     input_dir = input_dir.expanduser().resolve()
@@ -366,13 +394,14 @@ def process_folder(
         raise RuntimeError(f"没有找到视频文件：{input_dir}")
 
     run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_root = input_dir / "output" / f"video_compressed_{target_size.label}_no_audio_{run_id}"
+    out_root = input_dir / "output" / f"video_compressed_{settings.output_label}_no_audio_{run_id}"
     videos_dir = out_root / "videos"
     videos_dir.mkdir(parents=True, exist_ok=True)
 
     log(f"输入目录：{input_dir}")
     log(f"输出目录：{videos_dir}")
-    log(f"目标尺寸：{target_size.label}")
+    log(f"目标尺寸：{settings.target_size.label}")
+    log(f"压缩强度：CRF {settings.crf}")
     log(f"共找到 {len(videos)} 个视频")
 
     results: list[ProcessResult] = []
@@ -382,7 +411,7 @@ def process_folder(
         poster = videos_dir / f"{src.stem}_poster.jpg"
         source_bytes = src.stat().st_size
         try:
-            encode_video(ffmpeg, src, out, target_size)
+            encode_video(ffmpeg, src, out, settings)
             verify_decode(ffmpeg, out)
             generate_poster(ffmpeg, out, poster)
 
@@ -430,8 +459,8 @@ def process_folder(
         write_report(out_root / "final_report.tsv", results)
 
     write_report(out_root / "final_report.tsv", results)
-    write_summary_md(out_root / "summary.md", input_dir, out_root, results, target_size)
-    write_process_doc(out_root / "FFMPEG_PROCESS.md", input_dir, out_root, target_size)
+    write_summary_md(out_root / "summary.md", input_dir, out_root, results, settings)
+    write_process_doc(out_root / "FFMPEG_PROCESS.md", input_dir, out_root, settings)
 
     success = [r for r in results if r.status == "success"]
     total_src = sum(r.source_bytes for r in success)
@@ -509,6 +538,49 @@ def choose_target_size_with_osascript() -> Optional[TargetSize]:
     return TargetSize(DEFAULT_TARGET_W, DEFAULT_TARGET_H)
 
 
+def choose_crf_with_osascript() -> Optional[int]:
+    if sys.platform != "darwin":
+        return DEFAULT_CRF
+    items = ", ".join([*(f'"{label}"' for _, label in QUALITY_PRESETS), f'"{CUSTOM_CRF_LABEL}"'])
+    cp = run([
+        "osascript",
+        "-e",
+        (
+            f'choose from list {{{items}}} '
+            'with title "选择压缩强度" '
+            'with prompt "同一尺寸下，CRF 越高体积越小、画质越低。请选择：" '
+            f'default items {{"{QUALITY_PRESETS[1][1]}"}} '
+            'OK button name "继续" cancel button name "取消"'
+        ),
+    ])
+    if cp.returncode != 0:
+        return None
+    raw = cp.stdout.strip()
+    if not raw or raw == "false":
+        return None
+    if raw == CUSTOM_CRF_LABEL:
+        custom = run([
+            "osascript",
+            "-e",
+            (
+                'text returned of (display dialog "请输入 CRF，范围 0..51。数值越高体积越小，推荐 26：" '
+                'with title "自定义 CRF" default answer "26" '
+                'buttons {"取消", "继续"} default button "继续" cancel button "取消")'
+            ),
+        ])
+        if custom.returncode != 0:
+            return None
+        try:
+            return parse_crf(custom.stdout.strip())
+        except Exception as exc:
+            show_macos_dialog("CRF 格式错误", str(exc))
+            return None
+    for crf, label in QUALITY_PRESETS:
+        if raw == label:
+            return crf
+    return DEFAULT_CRF
+
+
 def show_macos_dialog(title: str, message: str) -> None:
     if sys.platform != "darwin":
         return
@@ -535,8 +607,13 @@ def run_macos_folder_picker_flow() -> int:
     if target_size is None:
         print("未选择目标尺寸，已取消。")
         return 1
+    crf = choose_crf_with_osascript()
+    if crf is None:
+        print("未选择压缩强度，已取消。")
+        return 1
+    settings = CompressionSettings(target_size=target_size, crf=crf)
     try:
-        out_root = process_folder(folder, target_size)
+        out_root = process_folder(folder, settings)
     except Exception as exc:
         print(f"处理失败：{exc}", file=sys.stderr)
         show_macos_dialog("处理失败", str(exc))
@@ -565,6 +642,8 @@ def run_gui() -> int:
     selected_dir = tk.StringVar(value="")
     selected_size = tk.StringVar(value=PRESET_SIZES[0][2])
     custom_size = tk.StringVar(value="")
+    selected_quality = tk.StringVar(value=QUALITY_PRESETS[1][1])
+    custom_crf = tk.StringVar(value="")
     status_text = tk.StringVar(value="请选择包含视频的文件夹。")
     output_root: dict[str, Path] = {}
     event_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -599,6 +678,25 @@ def run_gui() -> int:
     custom_entry = ttk.Entry(custom_row, textvariable=custom_size, width=18)
     custom_entry.pack(side="left")
     ttk.Label(custom_row, text="可选，例如 640x960；填写后优先使用").pack(side="left", padx=(8, 0))
+
+    quality_row = ttk.Frame(frame)
+    quality_row.pack(fill="x", pady=(0, 12))
+    ttk.Label(quality_row, text="压缩强度：").pack(side="left")
+    quality_combo = ttk.Combobox(
+        quality_row,
+        textvariable=selected_quality,
+        values=[label for _, label in QUALITY_PRESETS],
+        state="readonly",
+        width=34,
+    )
+    quality_combo.pack(side="left")
+
+    custom_crf_row = ttk.Frame(frame)
+    custom_crf_row.pack(fill="x", pady=(0, 12))
+    ttk.Label(custom_crf_row, text="自定义 CRF：").pack(side="left")
+    custom_crf_entry = ttk.Entry(custom_crf_row, textvariable=custom_crf, width=18)
+    custom_crf_entry.pack(side="left")
+    ttk.Label(custom_crf_row, text="可选，0..51；越高越小，填写后优先使用").pack(side="left", padx=(8, 0))
 
     picker = ttk.Frame(frame)
     picker.pack(fill="x")
@@ -651,9 +749,19 @@ def run_gui() -> int:
                 return TargetSize(width, height)
         return TargetSize(DEFAULT_TARGET_W, DEFAULT_TARGET_H)
 
-    def worker(folder: Path, target_size: TargetSize) -> None:
+    def current_crf() -> int:
+        raw_custom = custom_crf.get().strip()
+        if raw_custom:
+            return parse_crf(raw_custom)
+        label = selected_quality.get()
+        for crf, item_label in QUALITY_PRESETS:
+            if label == item_label:
+                return crf
+        return DEFAULT_CRF
+
+    def worker(folder: Path, settings: CompressionSettings) -> None:
         try:
-            out_root = process_folder(folder, target_size, log=lambda msg: event_queue.put(("log", msg)))
+            out_root = process_folder(folder, settings, log=lambda msg: event_queue.put(("log", msg)))
             event_queue.put(("done", out_root))
         except Exception as exc:
             event_queue.put(("error", f"{exc}\n\n{traceback.format_exc()}"))
@@ -677,12 +785,13 @@ def run_gui() -> int:
         progress.start(10)
         try:
             target_size = current_target_size()
+            settings = CompressionSettings(target_size=target_size, crf=current_crf())
         except Exception as exc:
             progress.stop()
             start_button.configure(state="normal")
-            messagebox.showerror("尺寸格式错误", str(exc))
+            messagebox.showerror("参数格式错误", str(exc))
             return
-        threading.Thread(target=worker, args=(folder, target_size), daemon=True).start()
+        threading.Thread(target=worker, args=(folder, settings), daemon=True).start()
 
     def poll_queue() -> None:
         try:
@@ -739,6 +848,12 @@ def main() -> int:
         default=TargetSize(DEFAULT_TARGET_W, DEFAULT_TARGET_H),
         help="目标视频尺寸，格式 WIDTHxHEIGHT，例如 480x640、720x960",
     )
+    parser.add_argument(
+        "--crf",
+        type=parse_crf,
+        default=DEFAULT_CRF,
+        help="压缩质量参数，0..51；越高体积越小、画质越低，默认 26",
+    )
     parser.add_argument("--gui", action="store_true", help="启动图形界面")
     parser.add_argument("--open", action="store_true", help="处理完成后打开输出目录")
     args = parser.parse_args()
@@ -746,7 +861,7 @@ def main() -> int:
     if args.gui or args.input_dir is None:
         return run_gui()
 
-    out_root = process_folder(args.input_dir, args.size)
+    out_root = process_folder(args.input_dir, CompressionSettings(target_size=args.size, crf=args.crf))
     if args.open:
         open_in_finder(out_root / "videos")
     return 0

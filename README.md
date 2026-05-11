@@ -5,6 +5,7 @@
 固定规则：
 
 - 输出尺寸：用户选择，默认推荐 `480x640`
+- 压缩强度：用户选择，默认推荐 `CRF 26`
 - 视频格式：`.mp4`
 - 视频编码：`H.264 / libx264`
 - 质量参数：`CRF 26`
@@ -30,12 +31,30 @@ open "dist/引导页视频压缩工具.app"
 ```
 
 工具会弹出文件夹选择窗口，选择包含视频的目录后自动处理，完成后打开输出目录。
-处理前会让用户选择目标视频尺寸，支持预设尺寸和自定义尺寸。
+处理前会让用户选择目标视频尺寸和压缩强度，支持预设值和自定义值。
+
+## 体积控制参数
+
+对输出视频大小影响最大的是：
+
+1. 目标尺寸：像素越少，体积通常越小。例如 `360x480` 会明显小于 `720x960`。
+2. CRF：同一尺寸下最重要的体积/画质参数。CRF 越高体积越小，画质损失越明显。
+
+工具内置压缩强度：
+
+| 选项 | CRF | 说明 |
+|---|---:|---|
+| 高清 | 23 | 画质更好，体积较大 |
+| 标准 | 26 | 推荐默认值 |
+| 更小 | 30 | 体积更小，画质略降 |
+| 极小 | 34 | 体积更小，画质下降明显 |
+
+`preset slow` 主要影响编码耗时和压缩效率，默认固定，不面向普通用户暴露。
 
 ## 命令行用法
 
 ```bash
-python3 compress_onboarding_videos.py "/path/to/video-folder" --size 480x640 --open
+python3 compress_onboarding_videos.py "/path/to/video-folder" --size 480x640 --crf 26 --open
 ```
 
 启动图形/文件夹选择模式：
@@ -98,7 +117,7 @@ dist/引导页视频压缩工具.app/Contents/Resources/AppIcon.icns
 每次处理会生成：
 
 ```text
-output/video_compressed_480x640_no_audio_<timestamp>/
+output/video_compressed_480x640_crf26_no_audio_<timestamp>/
   videos/
     xxx.mp4
     xxx_poster.jpg
@@ -110,7 +129,7 @@ output/video_compressed_480x640_no_audio_<timestamp>/
 其中 `480x640` 会替换为本次选择的目标尺寸，例如：
 
 ```text
-output/video_compressed_720x960_no_audio_<timestamp>/
+output/video_compressed_720x960_crf30_no_audio_<timestamp>/
 ```
 
 ## 文档
