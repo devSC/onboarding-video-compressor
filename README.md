@@ -72,6 +72,26 @@ bin/ffprobe
 dist/引导页视频压缩工具.app/Contents/Resources/bin/
 ```
 
+## App 图标
+
+图标源文件：
+
+```text
+assets/app_icon_1024.png
+```
+
+构建脚本会自动生成 macOS `.icns` 文件，并写入：
+
+```text
+dist/引导页视频压缩工具.app/Contents/Resources/AppIcon.icns
+```
+
+如果要换图标，替换 `assets/app_icon_1024.png` 后重新运行：
+
+```bash
+./build_macos_app.sh
+```
+
 ## 输出内容
 
 每次处理会生成：
@@ -93,4 +113,3 @@ output/video_compressed_480x640_no_audio_<timestamp>/
 ```text
 docs/video-compress-480x640-no-audio.md
 ```
-
