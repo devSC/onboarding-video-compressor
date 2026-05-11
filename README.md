@@ -73,7 +73,9 @@ python3 compress_onboarding_videos.py --gui
 brew install ffmpeg
 ```
 
-如果要让 App 自带 `ffmpeg/ffprobe`，把二进制文件放到：
+普通同事的 Mac 通常没有 Homebrew、Python、ffmpeg。正式分发版必须让 App 自带 `ffmpeg/ffprobe`。
+
+把可独立运行的 macOS `ffmpeg` 和 `ffprobe` 放到：
 
 ```text
 bin/ffmpeg
@@ -91,6 +93,10 @@ bin/ffprobe
 ```text
 dist/引导页视频压缩工具.app/Contents/Resources/bin/
 ```
+
+注意：不要直接复制 Homebrew 的 `/usr/local/bin/ffmpeg` 给同事分发。Homebrew 版通常依赖大量本机 dylib，在别的电脑上会缺库。应使用静态构建或随 App 一起打包所有依赖。
+
+当前 App launcher 是原生 Swift universal binary，不依赖 Python；但如果没有内置 `ffmpeg/ffprobe`，普通同事打开 App 后会看到“缺少内置依赖”的提示。
 
 ## App 图标
 

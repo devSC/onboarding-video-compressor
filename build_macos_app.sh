@@ -15,6 +15,7 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 cp "$PROJECT_DIR/compress_onboarding_videos.py" "$RESOURCES_DIR/compress_onboarding_videos.py"
+cp "$PROJECT_DIR/Sources/NativeCompressor.swift" "$RESOURCES_DIR/NativeCompressor.swift"
 
 if [ -f "$ICON_SOURCE" ]; then
   rm -rf "$ICONSET_DIR"
@@ -37,6 +38,8 @@ if [ -x "$PROJECT_DIR/bin/ffmpeg" ] || [ -x "$PROJECT_DIR/bin/ffprobe" ]; then
   mkdir -p "$RESOURCES_DIR/bin"
   [ -x "$PROJECT_DIR/bin/ffmpeg" ] && cp "$PROJECT_DIR/bin/ffmpeg" "$RESOURCES_DIR/bin/ffmpeg"
   [ -x "$PROJECT_DIR/bin/ffprobe" ] && cp "$PROJECT_DIR/bin/ffprobe" "$RESOURCES_DIR/bin/ffprobe"
+else
+  echo "Warning: bin/ffmpeg and bin/ffprobe were not found. The app will open, but non-developer machines need bundled ffmpeg/ffprobe to process videos." >&2
 fi
 
 cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
@@ -136,6 +139,18 @@ else
   clang -framework CoreFoundation -include mach-o/dyld.h "$PROJECT_DIR/dist/launcher.c" -o "$MACOS_DIR/launcher"
 fi
 rm -f "$PROJECT_DIR/dist/launcher.c"
+
+if command -v swiftc >/dev/null 2>&1; then
+  if swiftc -O -parse-as-library -target arm64-apple-macos11 "$PROJECT_DIR/Sources/NativeCompressor.swift" -o "$PROJECT_DIR/dist/native-launcher-arm64" 2>/dev/null \
+    && swiftc -O -parse-as-library -target x86_64-apple-macos11 "$PROJECT_DIR/Sources/NativeCompressor.swift" -o "$PROJECT_DIR/dist/native-launcher-x86_64" 2>/dev/null; then
+    lipo -create "$PROJECT_DIR/dist/native-launcher-arm64" "$PROJECT_DIR/dist/native-launcher-x86_64" -output "$MACOS_DIR/launcher"
+    rm -f "$PROJECT_DIR/dist/native-launcher-arm64" "$PROJECT_DIR/dist/native-launcher-x86_64"
+  elif swiftc -O -parse-as-library "$PROJECT_DIR/Sources/NativeCompressor.swift" -o "$MACOS_DIR/launcher" 2>/dev/null; then
+    :
+  else
+    echo "Warning: failed to build native Swift launcher; using Python launcher." >&2
+  fi
+fi
 
 xattr -cr "$APP_DIR" 2>/dev/null || true
 codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
