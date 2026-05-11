@@ -4,9 +4,9 @@
 
 这个工具用于把引导页、教程页、轻量展示视频统一处理为 App 内可用的轻量资源。
 
-固定输出规则：
+默认输出规则：
 
-- 视频尺寸：`480x640`
+- 视频尺寸：用户选择，默认推荐 `480x640`
 - 视频格式：`.mp4`
 - 视频编码：`H.264 / libx264`
 - 质量参数：`CRF 26`
@@ -22,17 +22,19 @@
 
 1. 打开 `dist/引导页视频压缩工具.app`。
 2. 在弹出的窗口中选择包含视频的文件夹。
-3. 等待处理完成。
-4. 工具会自动打开输出目录。
+3. 选择目标视频尺寸。
+4. 等待处理完成。
+5. 工具会自动打开输出目录。
 
 也可以使用双击脚本：
 
 1. 打开项目里的 `tools/压缩引导页视频.command`。
 2. 点击“选择视频文件夹”。
 3. 选择包含视频的文件夹。
-4. 点击“开始压缩”。
-5. 等待完成。
-6. 工具会自动打开输出目录。
+4. 选择目标视频尺寸，或填写自定义尺寸。
+5. 点击“开始压缩”。
+6. 等待完成。
+7. 工具会自动打开输出目录。
 
 输出目录里会包含：
 
@@ -62,7 +64,7 @@ dist/引导页视频压缩工具.app
 ## 给工程同事的命令行用法
 
 ```bash
-python3 tools/compress_onboarding_videos.py "/path/to/video-folder" --open
+python3 tools/compress_onboarding_videos.py "/path/to/video-folder" --size 480x640 --open
 ```
 
 不打开输出目录：
@@ -160,13 +162,14 @@ ffmpeg \
 flowchart TD
   A["选择视频文件夹"] --> B["扫描视频文件"]
   B --> C["逐个处理"]
-  C --> D["缩放并裁剪为 480x640"]
-  D --> E["libx264 / CRF 26 / preset slow 编码"]
-  E --> F["移除音轨"]
-  F --> G["解码校验"]
-  G --> H["生成首帧海报"]
-  H --> I["写入 final_report.tsv / summary.md"]
-  I --> J["打开输出目录"]
+  C --> D["选择目标尺寸"]
+  D --> E["缩放并裁剪为目标尺寸"]
+  E --> F["libx264 / CRF 26 / preset slow 编码"]
+  F --> G["移除音轨"]
+  G --> H["解码校验"]
+  H --> I["生成首帧海报"]
+  I --> J["写入 final_report.tsv / summary.md"]
+  J --> K["打开输出目录"]
 ```
 
 ## 时序图
@@ -180,11 +183,12 @@ sequenceDiagram
   participant FFprobe as ffprobe
 
   User->>App: 选择视频文件夹
+  User->>App: 选择目标视频尺寸
   App->>FS: 扫描视频文件
   FS-->>App: 返回文件列表
 
   loop 每个视频
-    App->>FFmpeg: 编码为 480x640 H.264，CRF 26，preset slow，-an
+    App->>FFmpeg: 编码为目标尺寸 H.264，CRF 26，preset slow，-an
     FFmpeg->>FS: 写入无音轨 MP4
     FFmpeg-->>App: 返回编码结果
 
@@ -192,7 +196,7 @@ sequenceDiagram
     FFmpeg-->>App: 返回校验结果
 
     App->>FFprobe: 检查尺寸和音轨
-    FFprobe-->>App: 返回 480x640，音轨数 0
+    FFprobe-->>App: 返回目标尺寸，音轨数 0
 
     App->>FFmpeg: 截取首帧，JPEG q=6
     FFmpeg->>FS: 写入 *_poster.jpg
@@ -207,7 +211,7 @@ sequenceDiagram
 
 每次处理完成后，工具会生成报告。验收时确认：
 
-- 每个输出视频尺寸都是 `480x640`
+- 每个输出视频尺寸都是本次选择的目标尺寸
 - 每个输出视频音轨数都是 `0`
 - 每个输出视频都有同前缀 `*_poster.jpg`
 - `final_report.tsv` 存在

@@ -18,8 +18,15 @@ from typing import Callable, Iterable, Optional
 
 
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm"}
-TARGET_W = 480
-TARGET_H = 640
+DEFAULT_TARGET_W = 480
+DEFAULT_TARGET_H = 640
+PRESET_SIZES = [
+    (480, 640, "480x640 - 推荐，引导页轻量版"),
+    (720, 960, "720x960 - 更清晰，体积更大"),
+    (1080, 1440, "1080x1440 - 接近原始尺寸"),
+    (360, 480, "360x480 - 更小体积"),
+]
+CUSTOM_SIZE_LABEL = "自定义尺寸..."
 CRF = 26
 PRESET = "slow"
 POSTER_Q = 6
@@ -41,6 +48,16 @@ class ProcessResult:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class TargetSize:
+    width: int
+    height: int
+
+    @property
+    def label(self) -> str:
+        return f"{self.width}x{self.height}"
+
+
 def human_bytes(n: int) -> str:
     if n < 1024:
         return f"{n} B"
@@ -48,6 +65,23 @@ def human_bytes(n: int) -> str:
     if kb < 1024:
         return f"{kb:.1f} KB"
     return f"{kb / 1024.0:.2f} MB"
+
+
+def parse_target_size(raw: str) -> TargetSize:
+    value = raw.strip().lower().replace(" ", "")
+    if "x" not in value:
+        raise argparse.ArgumentTypeError("尺寸格式应为 WIDTHxHEIGHT，例如 480x640")
+    w_s, h_s = value.split("x", 1)
+    try:
+        width = int(w_s)
+        height = int(h_s)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("尺寸必须是整数，例如 480x640") from exc
+    if width <= 0 or height <= 0:
+        raise argparse.ArgumentTypeError("尺寸必须大于 0")
+    if width % 2 != 0 or height % 2 != 0:
+        raise argparse.ArgumentTypeError("H.264 输出尺寸必须是偶数")
+    return TargetSize(width=width, height=height)
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -129,7 +163,7 @@ def ffprobe_audio_count(ffprobe: str, path: Path) -> int:
     return len([line for line in cp.stdout.splitlines() if line.strip()])
 
 
-def encode_video(ffmpeg: str, src: Path, dst: Path) -> None:
+def encode_video(ffmpeg: str, src: Path, dst: Path, target_size: TargetSize) -> None:
     cp = run([
         ffmpeg,
         "-nostdin",
@@ -138,7 +172,11 @@ def encode_video(ffmpeg: str, src: Path, dst: Path) -> None:
         "-y",
         "-i", str(src),
         "-map", "0:v:0",
-        "-vf", f"scale={TARGET_W}:{TARGET_H}:force_original_aspect_ratio=increase,crop={TARGET_W}:{TARGET_H}",
+        "-vf",
+        (
+            f"scale={target_size.width}:{target_size.height}:force_original_aspect_ratio=increase,"
+            f"crop={target_size.width}:{target_size.height}"
+        ),
         "-c:v", "libx264",
         "-preset", PRESET,
         "-crf", str(CRF),
@@ -203,7 +241,13 @@ def write_report(report_path: Path, results: Iterable[ProcessResult]) -> None:
             )
 
 
-def write_summary_md(summary_path: Path, input_dir: Path, out_root: Path, results: list[ProcessResult]) -> None:
+def write_summary_md(
+    summary_path: Path,
+    input_dir: Path,
+    out_root: Path,
+    results: list[ProcessResult],
+    target_size: TargetSize,
+) -> None:
     success = [r for r in results if r.status == "success"]
     failed = [r for r in results if r.status != "success"]
     total_src = sum(r.source_bytes for r in success)
@@ -218,7 +262,7 @@ def write_summary_md(summary_path: Path, input_dir: Path, out_root: Path, result
         "",
         "## 规则",
         "",
-        f"- 输出尺寸：`{TARGET_W}x{TARGET_H}`",
+        f"- 输出尺寸：`{target_size.label}`",
         "- 音轨：移除",
         f"- 视频编码：`libx264 / CRF {CRF} / preset {PRESET}`",
         "- 海报：首帧 JPG",
@@ -246,11 +290,12 @@ def write_summary_md(summary_path: Path, input_dir: Path, out_root: Path, result
     summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_process_doc(doc_path: Path, input_dir: Path, out_root: Path) -> None:
-    doc_path.write_text(f"""# 480x640 无音轨视频压缩处理说明
+def write_process_doc(doc_path: Path, input_dir: Path, out_root: Path, target_size: TargetSize) -> None:
+    doc_path.write_text(f"""# {target_size.label} 无音轨视频压缩处理说明
 
 输入目录：`{input_dir}`
 输出目录：`{out_root / "videos"}`
+目标尺寸：`{target_size.label}`
 
 ## 参数
 
@@ -262,7 +307,7 @@ ffmpeg \\
   -y \\
   -i "input.mp4" \\
   -map 0:v:0 \\
-  -vf "scale=480:640:force_original_aspect_ratio=increase,crop=480:640" \\
+  -vf "scale={target_size.width}:{target_size.height}:force_original_aspect_ratio=increase,crop={target_size.width}:{target_size.height}" \\
   -c:v libx264 \\
   -preset slow \\
   -crf 26 \\
@@ -293,19 +338,24 @@ ffmpeg \\
 ```mermaid
 flowchart TD
   A["选择视频文件夹"] --> B["扫描视频文件"]
-  B --> C["逐个处理"]
-  C --> D["缩放并裁剪为 480x640"]
-  D --> E["libx264 / CRF 26 / preset slow 编码"]
-  E --> F["移除音轨"]
-  F --> G["解码校验"]
-  G --> H["生成首帧海报"]
-  H --> I["写入报告"]
-  I --> J["打开输出目录"]
+  B --> C["选择目标尺寸"]
+  C --> D["逐个处理"]
+  D --> E["缩放并裁剪为 {target_size.label}"]
+  E --> F["libx264 / CRF 26 / preset slow 编码"]
+  F --> G["移除音轨"]
+  G --> H["解码校验"]
+  H --> I["生成首帧海报"]
+  I --> J["写入报告"]
+  J --> K["打开输出目录"]
 ```
 """, encoding="utf-8")
 
 
-def process_folder(input_dir: Path, log: Callable[[str], None] = print) -> Path:
+def process_folder(
+    input_dir: Path,
+    target_size: TargetSize,
+    log: Callable[[str], None] = print,
+) -> Path:
     input_dir = input_dir.expanduser().resolve()
     if not input_dir.is_dir():
         raise RuntimeError(f"输入目录不存在：{input_dir}")
@@ -316,12 +366,13 @@ def process_folder(input_dir: Path, log: Callable[[str], None] = print) -> Path:
         raise RuntimeError(f"没有找到视频文件：{input_dir}")
 
     run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_root = input_dir / "output" / f"video_compressed_480x640_no_audio_{run_id}"
+    out_root = input_dir / "output" / f"video_compressed_{target_size.label}_no_audio_{run_id}"
     videos_dir = out_root / "videos"
     videos_dir.mkdir(parents=True, exist_ok=True)
 
     log(f"输入目录：{input_dir}")
     log(f"输出目录：{videos_dir}")
+    log(f"目标尺寸：{target_size.label}")
     log(f"共找到 {len(videos)} 个视频")
 
     results: list[ProcessResult] = []
@@ -331,7 +382,7 @@ def process_folder(input_dir: Path, log: Callable[[str], None] = print) -> Path:
         poster = videos_dir / f"{src.stem}_poster.jpg"
         source_bytes = src.stat().st_size
         try:
-            encode_video(ffmpeg, src, out)
+            encode_video(ffmpeg, src, out, target_size)
             verify_decode(ffmpeg, out)
             generate_poster(ffmpeg, out, poster)
 
@@ -379,8 +430,8 @@ def process_folder(input_dir: Path, log: Callable[[str], None] = print) -> Path:
         write_report(out_root / "final_report.tsv", results)
 
     write_report(out_root / "final_report.tsv", results)
-    write_summary_md(out_root / "summary.md", input_dir, out_root, results)
-    write_process_doc(out_root / "FFMPEG_PROCESS.md", input_dir, out_root)
+    write_summary_md(out_root / "summary.md", input_dir, out_root, results, target_size)
+    write_process_doc(out_root / "FFMPEG_PROCESS.md", input_dir, out_root, target_size)
 
     success = [r for r in results if r.status == "success"]
     total_src = sum(r.source_bytes for r in success)
@@ -415,6 +466,49 @@ def choose_folder_with_osascript() -> Optional[Path]:
     return Path(raw)
 
 
+def choose_target_size_with_osascript() -> Optional[TargetSize]:
+    if sys.platform != "darwin":
+        return TargetSize(DEFAULT_TARGET_W, DEFAULT_TARGET_H)
+    items = ", ".join([*(f'"{label}"' for _, _, label in PRESET_SIZES), f'"{CUSTOM_SIZE_LABEL}"'])
+    cp = run([
+        "osascript",
+        "-e",
+        (
+            f'choose from list {{{items}}} '
+            'with title "选择目标视频尺寸" '
+            'with prompt "请选择压缩后的视频尺寸：" '
+            f'default items {{"{PRESET_SIZES[0][2]}"}} '
+            'OK button name "继续" cancel button name "取消"'
+        ),
+    ])
+    if cp.returncode != 0:
+        return None
+    raw = cp.stdout.strip()
+    if not raw or raw == "false":
+        return None
+    if raw == CUSTOM_SIZE_LABEL:
+        custom = run([
+            "osascript",
+            "-e",
+            (
+                'text returned of (display dialog "请输入目标尺寸，格式如 480x640：" '
+                'with title "自定义目标尺寸" default answer "480x640" '
+                'buttons {"取消", "继续"} default button "继续" cancel button "取消")'
+            ),
+        ])
+        if custom.returncode != 0:
+            return None
+        try:
+            return parse_target_size(custom.stdout.strip())
+        except Exception as exc:
+            show_macos_dialog("尺寸格式错误", str(exc))
+            return None
+    for width, height, label in PRESET_SIZES:
+        if raw == label:
+            return TargetSize(width, height)
+    return TargetSize(DEFAULT_TARGET_W, DEFAULT_TARGET_H)
+
+
 def show_macos_dialog(title: str, message: str) -> None:
     if sys.platform != "darwin":
         return
@@ -437,8 +531,12 @@ def run_macos_folder_picker_flow() -> int:
     if folder is None:
         print("未选择文件夹，已取消。")
         return 1
+    target_size = choose_target_size_with_osascript()
+    if target_size is None:
+        print("未选择目标尺寸，已取消。")
+        return 1
     try:
-        out_root = process_folder(folder)
+        out_root = process_folder(folder, target_size)
     except Exception as exc:
         print(f"处理失败：{exc}", file=sys.stderr)
         show_macos_dialog("处理失败", str(exc))
@@ -465,6 +563,8 @@ def run_gui() -> int:
     root.minsize(680, 500)
 
     selected_dir = tk.StringVar(value="")
+    selected_size = tk.StringVar(value=PRESET_SIZES[0][2])
+    custom_size = tk.StringVar(value="")
     status_text = tk.StringVar(value="请选择包含视频的文件夹。")
     output_root: dict[str, Path] = {}
     event_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -477,9 +577,28 @@ def run_gui() -> int:
 
     rule = ttk.Label(
         frame,
-        text="规则：480x640 / 无音轨 / 自动生成海报 / 自动生成报告 / 不修改源文件",
+        text="规则：选择目标尺寸 / 无音轨 / 自动生成海报 / 自动生成报告 / 不修改源文件",
     )
     rule.pack(anchor="w", pady=(6, 14))
+
+    size_row = ttk.Frame(frame)
+    size_row.pack(fill="x", pady=(0, 12))
+    ttk.Label(size_row, text="目标尺寸：").pack(side="left")
+    size_combo = ttk.Combobox(
+        size_row,
+        textvariable=selected_size,
+        values=[label for _, _, label in PRESET_SIZES],
+        state="readonly",
+        width=34,
+    )
+    size_combo.pack(side="left")
+
+    custom_row = ttk.Frame(frame)
+    custom_row.pack(fill="x", pady=(0, 12))
+    ttk.Label(custom_row, text="自定义尺寸：").pack(side="left")
+    custom_entry = ttk.Entry(custom_row, textvariable=custom_size, width=18)
+    custom_entry.pack(side="left")
+    ttk.Label(custom_row, text="可选，例如 640x960；填写后优先使用").pack(side="left", padx=(8, 0))
 
     picker = ttk.Frame(frame)
     picker.pack(fill="x")
@@ -522,9 +641,19 @@ def run_gui() -> int:
         log_box.see("end")
         log_box.configure(state="disabled")
 
-    def worker(folder: Path) -> None:
+    def current_target_size() -> TargetSize:
+        raw_custom = custom_size.get().strip()
+        if raw_custom:
+            return parse_target_size(raw_custom)
+        label = selected_size.get()
+        for width, height, item_label in PRESET_SIZES:
+            if label == item_label:
+                return TargetSize(width, height)
+        return TargetSize(DEFAULT_TARGET_W, DEFAULT_TARGET_H)
+
+    def worker(folder: Path, target_size: TargetSize) -> None:
         try:
-            out_root = process_folder(folder, log=lambda msg: event_queue.put(("log", msg)))
+            out_root = process_folder(folder, target_size, log=lambda msg: event_queue.put(("log", msg)))
             event_queue.put(("done", out_root))
         except Exception as exc:
             event_queue.put(("error", f"{exc}\n\n{traceback.format_exc()}"))
@@ -546,7 +675,14 @@ def run_gui() -> int:
         open_report_button.configure(state="disabled")
         status_text.set("处理中...")
         progress.start(10)
-        threading.Thread(target=worker, args=(folder,), daemon=True).start()
+        try:
+            target_size = current_target_size()
+        except Exception as exc:
+            progress.stop()
+            start_button.configure(state="normal")
+            messagebox.showerror("尺寸格式错误", str(exc))
+            return
+        threading.Thread(target=worker, args=(folder, target_size), daemon=True).start()
 
     def poll_queue() -> None:
         try:
@@ -595,8 +731,14 @@ def run_gui() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Compress onboarding videos to 480x640 no-audio MP4.")
+    parser = argparse.ArgumentParser(description="Compress onboarding videos to selected-size no-audio MP4.")
     parser.add_argument("input_dir", nargs="?", type=Path, help="包含视频文件的输入目录")
+    parser.add_argument(
+        "--size",
+        type=parse_target_size,
+        default=TargetSize(DEFAULT_TARGET_W, DEFAULT_TARGET_H),
+        help="目标视频尺寸，格式 WIDTHxHEIGHT，例如 480x640、720x960",
+    )
     parser.add_argument("--gui", action="store_true", help="启动图形界面")
     parser.add_argument("--open", action="store_true", help="处理完成后打开输出目录")
     args = parser.parse_args()
@@ -604,7 +746,7 @@ def main() -> int:
     if args.gui or args.input_dir is None:
         return run_gui()
 
-    out_root = process_folder(args.input_dir)
+    out_root = process_folder(args.input_dir, args.size)
     if args.open:
         open_in_finder(out_root / "videos")
     return 0

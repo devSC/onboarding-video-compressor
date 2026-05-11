@@ -4,7 +4,7 @@
 
 固定规则：
 
-- 输出尺寸：`480x640`
+- 输出尺寸：用户选择，默认推荐 `480x640`
 - 视频格式：`.mp4`
 - 视频编码：`H.264 / libx264`
 - 质量参数：`CRF 26`
@@ -30,11 +30,12 @@ open "dist/引导页视频压缩工具.app"
 ```
 
 工具会弹出文件夹选择窗口，选择包含视频的目录后自动处理，完成后打开输出目录。
+处理前会让用户选择目标视频尺寸，支持预设尺寸和自定义尺寸。
 
 ## 命令行用法
 
 ```bash
-python3 compress_onboarding_videos.py "/path/to/video-folder" --open
+python3 compress_onboarding_videos.py "/path/to/video-folder" --size 480x640 --open
 ```
 
 启动图形/文件夹选择模式：
@@ -104,6 +105,12 @@ output/video_compressed_480x640_no_audio_<timestamp>/
   final_report.tsv
   summary.md
   FFMPEG_PROCESS.md
+```
+
+其中 `480x640` 会替换为本次选择的目标尺寸，例如：
+
+```text
+output/video_compressed_720x960_no_audio_<timestamp>/
 ```
 
 ## 文档

@@ -73,30 +73,66 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-cat > "$MACOS_DIR/launcher" <<'SH'
-#!/bin/bash
-set -euo pipefail
+cat > "$PROJECT_DIR/dist/launcher.c" <<'C'
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
-APP_MACOS_DIR="$(cd "$(dirname "$0")" && pwd)"
-RESOURCES_DIR="$(cd "$APP_MACOS_DIR/../Resources" && pwd)"
-SCRIPT="$RESOURCES_DIR/compress_onboarding_videos.py"
+static int exists_executable(const char *path) {
+  return access(path, X_OK) == 0;
+}
 
-PYTHON_BIN=""
-for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-  if [ -x "$candidate" ]; then
-    PYTHON_BIN="$candidate"
-    break
-  fi
-done
+int main(int argc, char **argv) {
+  char exe_path[PATH_MAX];
+  ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (len < 0) {
+    unsigned int size = sizeof(exe_path);
+    if (_NSGetExecutablePath(exe_path, &size) != 0) {
+      return 1;
+    }
+  } else {
+    exe_path[len] = '\0';
+  }
 
-if [ -z "$PYTHON_BIN" ]; then
-  osascript -e 'display dialog "未找到 python3，无法启动工具。" with title "启动失败" buttons {"好"} default button "好"'
-  exit 1
-fi
+  char *last_slash = strrchr(exe_path, '/');
+  if (!last_slash) {
+    return 1;
+  }
+  *last_slash = '\0';
 
-"$PYTHON_BIN" "$SCRIPT" --gui
-SH
+  char script[PATH_MAX];
+  snprintf(script, sizeof(script), "%s/../Resources/compress_onboarding_videos.py", exe_path);
 
-chmod +x "$MACOS_DIR/launcher"
+  const char *python = NULL;
+  const char *candidates[] = {
+    "/opt/homebrew/bin/python3",
+    "/usr/local/bin/python3",
+    "/usr/bin/python3",
+    NULL
+  };
+  for (int i = 0; candidates[i] != NULL; i++) {
+    if (exists_executable(candidates[i])) {
+      python = candidates[i];
+      break;
+    }
+  }
+
+  if (!python) {
+    system("osascript -e 'display dialog \"未找到 python3，无法启动工具。\" with title \"启动失败\" buttons {\"好\"} default button \"好\"'");
+    return 1;
+  }
+
+  execl(python, python, script, "--gui", (char *)NULL);
+  return 1;
+}
+C
+
+clang -framework CoreFoundation -include mach-o/dyld.h "$PROJECT_DIR/dist/launcher.c" -o "$MACOS_DIR/launcher"
+rm -f "$PROJECT_DIR/dist/launcher.c"
+
+xattr -cr "$APP_DIR" 2>/dev/null || true
+codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
 
 echo "$APP_DIR"
